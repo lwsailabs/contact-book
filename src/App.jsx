@@ -2840,12 +2840,12 @@ const App = () => {
 
   const navItems = [
     {id:'basic',l:'基本',i:Calendar, colorClass: 'text-gray-600 bg-gray-50 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700'},
-    {id:'school',l:'接送',i:School, colorClass: 'text-indigo-600 bg-indigo-50 border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:border-indigo-800 dark:text-indigo-400 dark:hover:bg-indigo-900/50'},
-    {id:'activity',l:'活動',i:PawPrint, colorClass: 'text-fuchsia-600 bg-fuchsia-50 border-fuchsia-200 hover:bg-fuchsia-100 dark:bg-fuchsia-900/30 dark:border-fuchsia-800 dark:text-fuchsia-400 dark:hover:bg-fuchsia-900/50'},
-    {id:'food',l:'飲食',i:Utensils, colorClass: 'text-green-600 bg-green-50 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:border-green-800 dark:text-green-400 dark:hover:bg-green-900/50'},
+    {id:'school',l:'學校',i:School, colorClass: 'text-indigo-600 bg-indigo-50 border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:border-indigo-800 dark:text-indigo-400 dark:hover:bg-indigo-900/50'},
     {id:'sleep',l:'睡眠',i:Moon, colorClass: 'text-purple-600 bg-purple-50 border-purple-200 hover:bg-purple-100 dark:bg-purple-900/30 dark:border-purple-800 dark:text-purple-400 dark:hover:bg-purple-900/50'},
+    {id:'food',l:'飲食',i:Utensils, colorClass: 'text-green-600 bg-green-50 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:border-green-800 dark:text-green-400 dark:hover:bg-green-900/50'},
     {id:'physiology',l:'生理',i:Smile, colorClass: 'text-amber-600 bg-amber-50 border-amber-200 hover:bg-amber-100 dark:bg-amber-900/30 dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-900/50'},
     {id:'health',l:'健康',i:HeartPlus, colorClass: 'text-teal-600 bg-teal-50 border-teal-200 hover:bg-teal-100 dark:bg-teal-900/30 dark:border-teal-800 dark:text-teal-400 dark:hover:bg-teal-900/50'},
+    {id:'activity',l:'活動',i:PawPrint, colorClass: 'text-fuchsia-600 bg-fuchsia-50 border-fuchsia-200 hover:bg-fuchsia-100 dark:bg-fuchsia-900/30 dark:border-fuchsia-800 dark:text-fuchsia-400 dark:hover:bg-fuchsia-900/50'},
     {id:'notes',l:'備註',i:FileText, colorClass: 'text-gray-600 bg-gray-50 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700'},
     {id:'files',l:'檔案',i:Save, colorClass: 'text-gray-600 bg-gray-50 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700'}
   ];
@@ -2899,11 +2899,11 @@ const App = () => {
                 <div className="space-y-8">
                     <BasicSection formData={formData} handleChange={handleChange} dateInfo={dateInfo} handleJumpToToday={handleJumpToToday} handleAutoWeather={fetchWeather} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked} recordedDates={recordedDates} />
                     <SchoolSection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
-                    <ActivitySection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
-                    <DiningSection formData={formData} handleChange={handleChange} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
                     <SleepSection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} showToast={showToast} scrollToElement={scrollToElement} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
+                    <DiningSection formData={formData} handleChange={handleChange} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
                     <PhysiologySection formData={formData} handleChange={handleChange} listOps={listOps} showToast={showToast} scrollToElement={scrollToElement} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
                     <HealthSection formData={formData} handleChange={handleChange} listOps={listOps} showToast={showToast} scrollToElement={scrollToElement} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
+                    <ActivitySection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
                     <NotesSection formData={formData} handleChange={handleChange} onScrollTop={scrollToElement} generatedText={generatedText} onCopy={handleCopy} copySuccess={copySuccess} isLocked={isLocked} />
                     <FileSection onExportJSON={handleJsonExport} onImportJSON={(e) => processImport(e.target.files[0])} onClearToday={handleClearToday} onClearAll={handleClearAllData} isBulkExporting={isBulkExporting} processBulkImport={processBulkImport} onBulkExportJSON={handleBulkExport} onExportImage={handleImageExport} onBulkExportImage={handleBulkImageExport} />
                 </div>
