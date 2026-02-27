@@ -2860,7 +2860,7 @@ const App = () => {
         <div className="bg-gradient-to-r from-blue-500 to-indigo-600 p-6 text-white flex flex-col gap-2">
              <div className="flex justify-between items-start w-full"><div className="flex-1"><h1 className="text-2xl font-bold flex items-center gap-3 whitespace-nowrap"><Baby className="w-8 h-8 shrink-0"/> 親子成長聯絡簿</h1><div className="mt-2 space-y-1 w-full"><p className="text-blue-100 text-xs opacity-80">雲端代碼: {appId.slice(0,5)}***{appId.slice(-3)}</p>{formData.lastUpdated && <p className="text-blue-100 text-xs opacity-80">最後更新: {new Date(formData.lastUpdated).toLocaleString('zh-TW', { hour12: false })}</p>}</div></div></div>
              <div className="flex justify-between items-end mt-1">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
                     <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs border w-fit ${syncStatus==='saved'?'bg-green-500/20 border-green-400':'bg-white/20'}`}>{syncStatus==='saving'?<Loader2 className="w-3 h-3 animate-spin"/>:syncStatus==='saved'?<Cloud className="w-3 h-3"/>:<Wifi className="w-3 h-3"/>}<span>{syncStatus==='saving'?'儲存中':syncStatus==='saved'?'已同步':'準備中'}</span></div>
                     <button onClick={handleLogout} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border bg-white/10 hover:bg-white/20 border-white/20 transition-colors">
                         {authMode === 'family' ? <><Users className="w-3 h-3"/> 家庭同步</> : <><User className="w-3 h-3"/> 單機模式</>}
