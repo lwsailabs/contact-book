@@ -2347,7 +2347,9 @@ const NotesSection = React.memo(({ formData, handleChange, onScrollTop, generate
     );
 });
 
-const FileSection = React.memo(({ onExportJSON, onImportJSON, onClearToday, onClearAll, isBulkExporting, processBulkImport, onBulkExportJSON, onExportImage, onBulkExportImage }) => {
+const FileSection = React.memo(({ onExportJSON, onImportJSON, onClearToday, onClearAll, isBulkExporting, isBatchImageExporting, processBulkImport, onBulkExportJSON, onExportImage, onBulkExportImage }) => {
+    const [isExpanded, toggle] = useSectionExpand('files', null, true, true);
+    
     return (
         <section id="files" className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700 scroll-mt-28">
             <h2 className="flex items-center gap-2 text-lg font-semibold text-gray-700 dark:text-gray-300 mb-4">
@@ -2378,7 +2380,7 @@ const FileSection = React.memo(({ onExportJSON, onImportJSON, onClearToday, onCl
                 <div className="bg-indigo-50 dark:bg-indigo-900/20 p-5 rounded-2xl border border-indigo-100 dark:border-indigo-800/50 flex flex-col h-full shadow-sm">
                     <h3 className="font-bold text-indigo-800 dark:text-indigo-300 flex items-center gap-2 mb-4"><Database className="w-5 h-5"/>歷史資料</h3>
                     <div className="grid grid-cols-2 gap-3 flex-1">
-                        <button type="button" onClick={onBulkExportJSON} disabled={isBulkExporting} className="flex flex-col items-center justify-center gap-2 bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 p-3 rounded-xl transition-colors disabled:opacity-50 hover:bg-indigo-50 dark:hover:bg-gray-700 text-xs sm:text-sm font-semibold shadow-sm h-full text-center">
+                        <button type="button" onClick={onBulkExportJSON} disabled={isBulkExporting || isBatchImageExporting} className="flex flex-col items-center justify-center gap-2 bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 p-3 rounded-xl transition-colors disabled:opacity-50 hover:bg-indigo-50 dark:hover:bg-gray-700 text-xs sm:text-sm font-semibold shadow-sm h-full text-center">
                             {isBulkExporting ? <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 animate-spin"/> : <Upload className="w-5 h-5 sm:w-6 sm:h-6"/>} 
                             匯出 JSON
                         </button>
@@ -2386,8 +2388,8 @@ const FileSection = React.memo(({ onExportJSON, onImportJSON, onClearToday, onCl
                             <Download className="w-5 h-5 sm:w-6 sm:h-6"/> 匯入 JSON
                             <input type="file" accept=".json" onChange={(e) => processBulkImport(e.target.files[0])} className="hidden" />
                         </label>
-                        <button type="button" onClick={onBulkExportImage} disabled={isBulkExporting} className="flex flex-col items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white p-3 rounded-xl transition-transform active:scale-95 shadow-sm font-bold text-xs sm:text-sm disabled:opacity-50 disabled:active:scale-100 h-full text-center">
-                            {isBulkExporting ? <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 animate-spin"/> : <ImageUp className="w-5 h-5 sm:w-6 sm:h-6"/>} 
+                        <button type="button" onClick={onBulkExportImage} disabled={isBulkExporting || isBatchImageExporting} className="flex flex-col items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white p-3 rounded-xl transition-transform active:scale-95 shadow-sm font-bold text-xs sm:text-sm disabled:opacity-50 disabled:active:scale-100 h-full text-center">
+                            {isBatchImageExporting ? <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 animate-spin"/> : <ImageUp className="w-5 h-5 sm:w-6 sm:h-6"/>} 
                             批次圖片
                         </button>
                         <button type="button" onClick={onClearAll} className="flex flex-col items-center justify-center gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 text-red-600 dark:text-red-400 p-3 rounded-xl hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors text-xs sm:text-sm font-bold shadow-sm h-full text-center">
@@ -2411,6 +2413,7 @@ const App = () => {
   const [errorModal, setErrorModal] = useState(null);
   const [bulkImportConfirm, setBulkImportConfirm] = useState(null);
   const [isBulkExporting, setIsBulkExporting] = useState(false);
+  const [isBatchImageExporting, setIsBatchImageExporting] = useState(false);
   
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [loginError, setLoginError] = useState('');
@@ -2500,10 +2503,19 @@ const App = () => {
   const scrollToElement = useCallback((id, retries = 5) => {
       const attemptScroll = (currentRetries) => {
           const el = document.getElementById(id);
-          if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } 
-          else if (currentRetries > 0) { setTimeout(() => attemptScroll(currentRetries - 1), 100); }
+          if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              el.classList.add('ring-2', 'ring-indigo-500', 'ring-offset-2', 'dark:ring-offset-gray-800', 'transition-all', 'duration-500');
+              setTimeout(() => el.classList.remove('ring-2', 'ring-indigo-500', 'ring-offset-2', 'dark:ring-offset-gray-800'), 1500);
+          } else if (currentRetries > 0) {
+              setTimeout(() => attemptScroll(currentRetries - 1), 100);
+          }
       };
       attemptScroll(retries);
+  }, []);
+
+  const handleScrollToTop = useCallback(() => { 
+      window.scrollTo({ top: 0, behavior: 'smooth' }); 
   }, []);
 
   const fetchWeather = useWeather(formData.date, dispatch, showToast);
@@ -2698,7 +2710,7 @@ const App = () => {
   };
 
   const handleBulkImageExport = async () => {
-      setIsBulkExporting(true);
+      setIsBatchImageExporting(true);
       showToast('準備批次匯出圖片，這可能需要一點時間...', 'info');
       try {
           if (!window.html2canvas) {
@@ -2718,7 +2730,7 @@ const App = () => {
 
           if (allData.length === 0) {
               showToast('沒有資料可匯出', 'info');
-              setIsBulkExporting(false);
+              setIsBatchImageExporting(false);
               return;
           }
 
@@ -2773,7 +2785,7 @@ const App = () => {
           console.error(error);
           showToast("圖片批次匯出失敗，請稍後再試", 'error');
       }
-      setIsBulkExporting(false);
+      setIsBatchImageExporting(false);
   };
 
   const processBulkImport = (file) => {
@@ -2897,15 +2909,15 @@ const App = () => {
 
             {!formData.date ? ( <FormSkeleton /> ) : (
                 <div className="space-y-8">
-                    <BasicSection formData={formData} handleChange={handleChange} dateInfo={dateInfo} handleJumpToToday={handleJumpToToday} handleAutoWeather={fetchWeather} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked} recordedDates={recordedDates} />
-                    <SchoolSection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
-                    <SleepSection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} showToast={showToast} scrollToElement={scrollToElement} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
-                    <DiningSection formData={formData} handleChange={handleChange} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
-                    <PhysiologySection formData={formData} handleChange={handleChange} listOps={listOps} showToast={showToast} scrollToElement={scrollToElement} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
-                    <HealthSection formData={formData} handleChange={handleChange} listOps={listOps} showToast={showToast} scrollToElement={scrollToElement} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
-                    <ActivitySection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={scrollToElement} handlers={handlers} isLocked={isLocked}/>
-                    <NotesSection formData={formData} handleChange={handleChange} onScrollTop={scrollToElement} generatedText={generatedText} onCopy={handleCopy} copySuccess={copySuccess} isLocked={isLocked} />
-                    <FileSection onExportJSON={handleJsonExport} onImportJSON={(e) => processImport(e.target.files[0])} onClearToday={handleClearToday} onClearAll={handleClearAllData} isBulkExporting={isBulkExporting} processBulkImport={processBulkImport} onBulkExportJSON={handleBulkExport} onExportImage={handleImageExport} onBulkExportImage={handleBulkImageExport} />
+                    <BasicSection formData={formData} handleChange={handleChange} dateInfo={dateInfo} handleJumpToToday={handleJumpToToday} handleAutoWeather={fetchWeather} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={handleScrollToTop} handlers={handlers} isLocked={isLocked} recordedDates={recordedDates} />
+                    <SchoolSection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={handleScrollToTop} handlers={handlers} isLocked={isLocked}/>
+                    <SleepSection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} showToast={showToast} scrollToElement={scrollToElement} onScrollTop={handleScrollToTop} handlers={handlers} isLocked={isLocked}/>
+                    <DiningSection formData={formData} handleChange={handleChange} listOps={listOps} onScrollTop={handleScrollToTop} handlers={handlers} isLocked={isLocked}/>
+                    <PhysiologySection formData={formData} handleChange={handleChange} listOps={listOps} showToast={showToast} scrollToElement={scrollToElement} onScrollTop={handleScrollToTop} handlers={handlers} isLocked={isLocked}/>
+                    <HealthSection formData={formData} handleChange={handleChange} listOps={listOps} showToast={showToast} scrollToElement={scrollToElement} onScrollTop={handleScrollToTop} handlers={handlers} isLocked={isLocked}/>
+                    <ActivitySection formData={formData} handleChange={handleChange} handleTimeReset={handleTimeReset} listOps={listOps} onScrollTop={handleScrollToTop} handlers={handlers} isLocked={isLocked}/>
+                    <NotesSection formData={formData} handleChange={handleChange} onScrollTop={handleScrollToTop} generatedText={generatedText} onCopy={handleCopy} copySuccess={copySuccess} isLocked={isLocked} />
+                    <FileSection onExportJSON={handleJsonExport} onImportJSON={(e) => processImport(e.target.files[0])} onClearToday={handleClearToday} onClearAll={handleClearAllData} isBulkExporting={isBulkExporting} isBatchImageExporting={isBatchImageExporting} processBulkImport={processBulkImport} onBulkExportJSON={handleBulkExport} onExportImage={handleImageExport} onBulkExportImage={handleBulkImageExport} />
                 </div>
             )}
         </div>
