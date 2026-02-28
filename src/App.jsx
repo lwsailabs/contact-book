@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback, useReducer } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Calendar, Moon, Utensils, School, Save, FileText, ClipboardList, 
@@ -11,22 +11,21 @@ import {
 
 // Firebase Imports
 import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signInWithEmailAndPassword, signOut 
-} from 'firebase/auth';
-import { 
-  initializeFirestore, persistentLocalCache, 
-  doc, setDoc, getDocs, collection, onSnapshot, writeBatch, deleteDoc
-} from 'firebase/firestore';
+import { getAuth, signInAnonymously, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { initializeFirestore, persistentLocalCache, doc, setDoc, getDocs, collection, writeBatch, deleteDoc } from 'firebase/firestore';
 
-// --- 新增：第一階段模組化匯入 ---
-import { HOLIDAYS_CONFIG, MAKE_UP_DAYS, HOURS, MINUTES, ACTIONS, OPTIONS } from './constants/config';
-import { getDateStatus, getTaiwanTimeParts, formatRocDate, getCurrentTime, sortListHelper, getInitialFormData } from './utils/helpers';
+// --- 模組化匯入 (階段一 & 階段二) ---
+import { ACTIONS, OPTIONS, HOURS, MINUTES } from './constants/config';
+import { getDateStatus, getInitialFormData, getCurrentTime, formatRocDate } from './utils/helpers';
 import { generateReportText } from './utils/reportGenerator';
+
+import { useWeather } from './hooks/useWeather';
+import { useFirebaseSync, useRecordedDates } from './hooks/useFirebase';
+import { useSectionExpand } from './hooks/useSectionExpand';
+import { useContactBookForm } from './hooks/useContactBookForm';
 // ---------------------------------
 
 // --- 1. Global Initialization & Config ---
-// 👇 準備佈署到 GitHub: 請將下方的 myFirebaseConfig 替換為您在 Firebase 主控台取得的真實設定檔
 const myFirebaseConfig = {
   apiKey: "AIzaSyBIakebs6orkgvGfMImFKC9fJGZ1eeRVnA",
   authDomain: "contact-book-5a035.firebaseapp.com",
@@ -36,587 +35,25 @@ const myFirebaseConfig = {
   appId: "1:861889746646:web:4c5b659164731068429b77"
 };
 
-// 為了同時相容目前的預覽環境與未來的 GitHub 佈署，加入雙重判斷
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : myFirebaseConfig;
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-contact-book'; // 您可以自訂您的 App 識別碼
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-contact-book';
 
 let app, auth, db;
-// 檢查是否有設定有效的 apiKey，避免未設定時導致整個畫面崩潰
 if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== "請將這裡替換為您的 apiKey") {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
-  db = initializeFirestore(app, {
-    localCache: persistentLocalCache()
-  });
+  db = initializeFirestore(app, { localCache: persistentLocalCache() });
 } else {
   console.warn("⚠️ Firebase 尚未設定完整，請確認 firebaseConfig 資料是否正確填寫。");
 }
 
-// 👨‍👩‍👦 家庭共用帳號設定 (請填入您在 Firebase 後台建立的 Email)
-const FAMILY_ACCOUNT = {
-  email: 'family@contactbook.com' // 👈 已經幫您修改成正確的信箱囉！
-};
-
-// --- Logic Layer: Reducer Handlers ---
-const actionHandlers = {
-    [ACTIONS.SET_FULL_DATA]: (state, action) => ({ ...state, ...action.payload }),
-    
-    [ACTIONS.UPDATE_FIELD]: (state, action) => {
-        const { name, value } = action.payload;
-        if (name === 'date') return { ...getInitialFormData(), date: value };
-        
-        const newState = { ...state, [name]: value };
-        if (name === 'isOvernight' && value === '是' && !state.overnightStartDate) {
-            newState.overnightStartDate = state.date;
-            newState.overnightEndDate = state.date;
-        }
-        if (name === 'sleepWakeUp' && state.isWakeUpBreastfeeding) {
-            const updatedBFList = state.breastfeedingTimes.map(b => b.source === 'sleep-wakeup' ? { ...b, time: value || '00:00' } : b);
-            newState.breastfeedingTimes = sortListHelper(updatedBFList);
-        }
-        if (name === 'sleepBedtime' && state.isBedtimeBreastfeeding) {
-            const updatedBFList = state.breastfeedingTimes.map(b => b.source === 'sleep-bedtime' ? { ...b, time: value || '00:00' } : b);
-            newState.breastfeedingTimes = sortListHelper(updatedBFList);
-        }
-        return newState;
-    },
-    
-    [ACTIONS.RESET_DATE_TO_TODAY]: (state) => {
-        const t = getTaiwanTimeParts();
-        return { ...getInitialFormData(), date: `${t.year}-${t.month}-${t.day}` };
-    },
-
-    [ACTIONS.ADD_ITEM]: (state, action) => {
-        const id = action.item.id || Date.now();
-        const newItem = { ...action.item, id };
-        const newList = [...(state[action.key] || []), newItem];
-        return { ...state, [action.key]: sortListHelper(newList) };
-    },
-
-    [ACTIONS.REMOVE_ITEM]: (state, action) => {
-         let newState = { ...state, [action.key]: state[action.key].filter(i => i.id !== action.id) };
-         if (action.key === 'symptoms') {
-             const removedItem = state.symptoms.find(i => i.id === action.id);
-             if (removedItem && removedItem.source === 'bowel-list' && removedItem.sourceId) {
-                 const updatedBowelList = newState.bowelMovements.map(b => b.id === removedItem.sourceId ? { ...b, type: '正常' } : b);
-                 newState.bowelMovements = sortListHelper(updatedBowelList);
-             }
-         }
-         return newState;
-    },
-
-    [ACTIONS.UPDATE_ITEM]: (state, action) => {
-         const newList = state[action.key].map(i => i.id === action.id ? { ...i, [action.field]: action.value } : i);
-         let newState = { ...state, [action.key]: sortListHelper(newList) };
-         
-         if (action.key === 'sleepAwakeRecords' && action.field === 'time') {
-             const updatedBFList = newState.breastfeedingTimes.map(b => (b.source === 'sleep-awake' && b.sourceId === action.id) ? { ...b, time: action.value || '00:00' } : b);
-             newState.breastfeedingTimes = sortListHelper(updatedBFList);
-         }
-         if (action.key === 'napRecords' && action.field === 'startTime') {
-             const updatedBFList = newState.breastfeedingTimes.map(b => (b.source === 'nap-list' && b.sourceId === action.id) ? { ...b, time: action.value || '00:00' } : b);
-             newState.breastfeedingTimes = sortListHelper(updatedBFList);
-         }
-         return newState;
-    },
-
-    [ACTIONS.RESET_MEAL]: (state, action) => {
-        const { meal } = action.payload; 
-        return {
-            ...state,
-            [`meal${meal}`]: '',
-            [`meal${meal}Time`]: '',
-            [`appetite${meal}`]: '',
-            [`water${meal}`]: ''
-        };
-    },
-
-    [ACTIONS.RESET_ITEM_FIELDS]: (state, action) => {
-        const { key, id, fields } = action.payload;
-        const newList = state[key].map(i => {
-            if (i.id === id) {
-                const updates = {};
-                fields.forEach(f => updates[f] = '');
-                return { ...i, ...updates };
-            }
-            return i;
-        });
-        return { ...state, [key]: sortListHelper(newList) };
-    },
-
-    [ACTIONS.DELETE_LINKED_RECORD]: (state, action) => {
-        const { listKey, id } = action.payload;
-        const list = state[listKey] || [];
-        const itemToDelete = list.find(i => i.id === id);
-        const newList = list.filter(i => i.id !== id);
-        let newState = { ...state, [listKey]: sortListHelper(newList) };
-        if (itemToDelete && itemToDelete.source && itemToDelete.sourceId) {
-            const { source, sourceId, linkedField } = itemToDelete;
-            let targetListKey = '';
-            if (source === 'symptom-list') targetListKey = 'symptoms';
-            else if (source === 'injury-list') targetListKey = 'injuryRecords';
-            let targetField = linkedField;
-            if (!targetField) {
-                if (listKey === 'medications') targetField = 'isMedicated';
-                else if (listKey === 'medicalLocations') targetField = 'isDoctorVisited';
-            }
-            if (targetListKey && targetField && newState[targetListKey]) {
-                const newTargetList = newState[targetListKey].map(item => {
-                    if (item.id === sourceId) {
-                        return { ...item, [targetField]: false };
-                    }
-                    return item;
-                });
-                newState = { ...newState, [targetListKey]: sortListHelper(newTargetList) };
-            }
-        }
-        return newState;
-    },
-
-    [ACTIONS.UPDATE_BOWEL_TYPE]: (state, action) => {
-        const { id, value, time } = action.payload;
-        const targetBowel = state.bowelMovements.find(i => i.id === id);
-        const prevValue = targetBowel ? targetBowel.type : null;
-        
-        const updatedBowelList = state.bowelMovements.map(i => i.id === id ? { ...i, type: value } : i);
-        let newState = { ...state, bowelMovements: sortListHelper(updatedBowelList) };
-        
-        if (value === '拉肚子/腸胃炎' && prevValue !== '拉肚子/腸胃炎') {
-            const newSymptom = { id: Date.now(), time: time || '00:00', desc: '拉肚子/腸胃炎', isFever: false, isPreviousDay: false, source: 'bowel-list', sourceId: id };
-            newState.symptoms = sortListHelper([...state.symptoms, newSymptom]);
-        } else if (prevValue === '拉肚子/腸胃炎' && value !== '拉肚子/腸胃炎') {
-            newState.symptoms = state.symptoms.filter(s => !(s.source === 'bowel-list' && s.sourceId === id));
-        }
-        return newState;
-    },
-
-    [ACTIONS.TOGGLE_WAKE_UP_BREASTFEEDING]: (state, action) => {
-        const { checked, time } = action.payload;
-        let newState = { ...state, isWakeUpBreastfeeding: checked };
-        const existingIdx = state.breastfeedingTimes.findIndex(b => b.source === 'sleep-wakeup');
-        if (checked) {
-            if (existingIdx === -1) {
-                const newRecord = { id: Date.now(), time: time || '00:00', isNap: false, source: 'sleep-wakeup' };
-                newState.breastfeedingTimes = sortListHelper([...state.breastfeedingTimes, newRecord]);
-            }
-        } else {
-            if (existingIdx !== -1) {
-                newState.breastfeedingTimes = state.breastfeedingTimes.filter((_, i) => i !== existingIdx);
-            }
-        }
-        return newState;
-    },
-
-    [ACTIONS.TOGGLE_AWAKE_IS_BREASTFEEDING]: (state, action) => {
-        const { id, checked, time } = action.payload;
-        const updatedAwakeList = state.sleepAwakeRecords.map(i => i.id === id ? { ...i, isBreastfeeding: checked } : i);
-        let newState = { ...state, sleepAwakeRecords: sortListHelper(updatedAwakeList) };
-        
-        const existingIdx = state.breastfeedingTimes.findIndex(b => 
-            (b.source === 'sleep-awake' && b.sourceId === id) || 
-            (!b.sourceId && b.source === 'sleep-awake' && b.time === time)
-        );
-        
-        if (checked) {
-            if (existingIdx === -1) {
-                const newRecord = { id: Date.now(), time: time || '00:00', isNap: false, source: 'sleep-awake', sourceId: id };
-                newState.breastfeedingTimes = sortListHelper([...state.breastfeedingTimes, newRecord]);
-            }
-        } else {
-            if (existingIdx !== -1) {
-                newState.breastfeedingTimes = state.breastfeedingTimes.filter((_, i) => i !== existingIdx);
-            }
-        }
-        return newState;
-    },
-
-    [ACTIONS.TOGGLE_BEDTIME_BREASTFEEDING]: (state, action) => {
-        const { checked, time } = action.payload;
-        let newState = { ...state, isBedtimeBreastfeeding: checked };
-        const existingIdx = state.breastfeedingTimes.findIndex(b => b.source === 'sleep-bedtime');
-        if (checked) {
-            if (existingIdx === -1) {
-                const newRecord = { id: Date.now(), time: time || '00:00', isNap: false, source: 'sleep-bedtime' };
-                newState.breastfeedingTimes = sortListHelper([...state.breastfeedingTimes, newRecord]);
-            }
-        } else {
-            if (existingIdx !== -1) {
-                newState.breastfeedingTimes = state.breastfeedingTimes.filter((_, i) => i !== existingIdx);
-            }
-        }
-        return newState;
-    },
-
-    [ACTIONS.TOGGLE_NAP_IS_BREASTFEEDING]: (state, action) => {
-        const { id, checked, time, isNap } = action.payload;
-        const targetNap = state.napRecords.find(i => i.id === id);
-        if (!targetNap) return state;
-
-        if (targetNap.source === 'breastfeeding-list' && targetNap.sourceId) {
-            if (!checked) {
-                const updatedNapList = state.napRecords.map(i => 
-                    i.id === id ? { ...i, isBreastfeeding: false, source: undefined, sourceId: undefined } : i
-                );
-                const updatedBFList = state.breastfeedingTimes.filter(b => b.id !== targetNap.sourceId);
-                return { ...state, napRecords: sortListHelper(updatedNapList), breastfeedingTimes: sortListHelper(updatedBFList) };
-            } else {
-                const updatedNapList = state.napRecords.map(i => i.id === id ? { ...i, isBreastfeeding: checked } : i);
-                return { ...state, napRecords: sortListHelper(updatedNapList) };
-            }
-        } else {
-            const updatedNapList = state.napRecords.map(i => i.id === id ? { ...i, isBreastfeeding: checked } : i);
-            let newState = { ...state, napRecords: sortListHelper(updatedNapList) };
-            
-            const existingBfIndex = state.breastfeedingTimes.findIndex(b => 
-                (b.source === 'nap-list' && b.sourceId === id) || 
-                (!b.sourceId && b.source === 'nap-list' && b.time === targetNap.startTime)
-            );
-
-            if (checked) {
-                if (existingBfIndex !== -1) {
-                    const updatedBFList = state.breastfeedingTimes.map((b, idx) => 
-                        idx === existingBfIndex ? { ...b, isNap: isNap || false, time: time || '00:00' } : b
-                    );
-                    newState.breastfeedingTimes = sortListHelper(updatedBFList);
-                } else {
-                    const newRecord = { id: Date.now(), time: time || '00:00', isNap: isNap || false, source: 'nap-list', sourceId: id };
-                    newState.breastfeedingTimes = sortListHelper([...state.breastfeedingTimes, newRecord]);
-                }
-            } else {
-                if (existingBfIndex !== -1) {
-                    newState.breastfeedingTimes = state.breastfeedingTimes.filter((_, idx) => idx !== existingBfIndex);
-                }
-            }
-            return newState;
-        }
-    },
-
-    [ACTIONS.TOGGLE_NAP_IS_NAP]: (state, action) => {
-        const { id, checked } = action.payload;
-        const targetNap = state.napRecords.find(i => i.id === id);
-        const updatedNapList = state.napRecords.map(i => i.id === id ? { ...i, isNap: checked } : i);
-        let newState = { ...state, napRecords: sortListHelper(updatedNapList) };
-        
-        if (targetNap && targetNap.isBreastfeeding) {
-            const timeToMatch = targetNap.startTime || '00:00';
-            const updatedBFList = state.breastfeedingTimes.map(b => 
-                (
-                    b.sourceId === id || 
-                    (!b.sourceId && b.source === 'nap-list' && b.time === timeToMatch) ||
-                    (targetNap.source === 'breastfeeding-list' && targetNap.sourceId === b.id)
-                ) 
-                    ? { ...b, isNap: checked } 
-                    : b
-            );
-            newState.breastfeedingTimes = sortListHelper(updatedBFList);
-        }
-        return newState;
-    },
-
-    [ACTIONS.TOGGLE_BREASTFEEDING_IS_NAP]: (state, action) => {
-        const { id, checked, time } = action.payload;
-        const targetBF = state.breastfeedingTimes.find(i => i.id === id);
-        const updatedBFList = state.breastfeedingTimes.map(i => i.id === id ? { ...i, isNap: checked } : i);
-        let newState = { ...state, breastfeedingTimes: sortListHelper(updatedBFList) };
-        
-        if (targetBF && targetBF.source === 'nap-list') {
-            const updatedNapList = state.napRecords.map(n => 
-                (n.id === targetBF.sourceId || (!targetBF.sourceId && n.startTime === targetBF.time)) 
-                    ? { ...n, isNap: checked } 
-                    : n
-            );
-            newState.napRecords = sortListHelper(updatedNapList);
-        } else {
-            const existingNapIndex = state.napRecords.findIndex(n => 
-                (n.source === 'breastfeeding-list' && n.sourceId === id) || 
-                (!n.sourceId && n.startTime === time && n.isBreastfeeding)
-            );
-            
-            if (existingNapIndex !== -1) {
-                const updatedNapList = state.napRecords.map((n, idx) => 
-                    idx === existingNapIndex ? { ...n, isNap: checked } : n
-                );
-                newState.napRecords = sortListHelper(updatedNapList);
-            } else if (checked) {
-                const newNap = { id: Date.now(), startTime: time || '00:00', endTime: '', isBreastfeeding: true, isNap: true, source: 'breastfeeding-list', sourceId: id };
-                newState.napRecords = sortListHelper([...state.napRecords, newNap]);
-            }
-        }
-        return newState;
-    }
-};
-
-const formReducer = (state, action) => {
-    const handler = actionHandlers[action.type];
-    return handler ? handler(state, action) : state;
-};
+const FAMILY_ACCOUNT = { email: 'family@contactbook.com' };
 
 // --- Hooks ---
 const useToast = () => {
     const [toast, setToast] = useState(null);
     const showToast = useCallback((message, type = 'info') => setToast({ message, type }), []);
     return { toast, showToast, setToast };
-};
-
-let openccConverter = null;
-const toTraditionalAsync = async (str) => {
-    if (!str) return str;
-    try {
-        if (!window.OpenCC) {
-            await new Promise((resolve, reject) => {
-                const script = document.createElement('script');
-                script.src = 'https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/full.js';
-                script.onload = resolve;
-                script.onerror = reject;
-                document.head.appendChild(script);
-            });
-        }
-        if (!openccConverter) {
-            openccConverter = window.OpenCC.Converter({ from: 'cn', to: 'tw' });
-        }
-        return openccConverter(str);
-    } catch (e) {
-        console.warn("繁簡轉換套件載入失敗，回退至原字串", e);
-        return str; 
-    }
-};
-
-const useWeather = (date, dispatch, showToast) => {
-    return useCallback(async (searchQuery = '') => {
-        const fetchWeather = async (lat, lon, fallbackName = '') => {
-            try {
-              const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=temperature_2m_max,temperature_2m_min&timezone=auto&start_date=${date}&end_date=${date}`);
-              const data = await res.json();
-              
-              let locationName = fallbackName;
-              try {
-                  const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=zh-TW`);
-                  const geoData = await geoRes.json();
-                  if (geoData && geoData.address) {
-                      const city = geoData.address.city || geoData.address.county || geoData.address.town || '';
-                      const district = geoData.address.suburb || geoData.address.city_district || geoData.address.village || geoData.address.neighbourhood || '';
-                      if (city || district) {
-                          const rawName = city === district ? city : `${city}${district}`;
-                          locationName = await toTraditionalAsync(rawName); 
-                      }
-                  }
-              } catch (e) { console.error("Geo fetch failed", e); }
-              
-              if (data.daily?.temperature_2m_max) {
-                 dispatch({ type: ACTIONS.UPDATE_FIELD, payload: { name: 'weatherTempMax', value: data.daily.temperature_2m_max[0] } });
-                 dispatch({ type: ACTIONS.UPDATE_FIELD, payload: { name: 'weatherTempMin', value: data.daily.temperature_2m_min[0] } });
-                 if (locationName) dispatch({ type: ACTIONS.UPDATE_FIELD, payload: { name: 'weatherLocation', value: locationName } });
-                 showToast('氣溫資料已更新', 'success');
-              } else showToast("查無該日期的氣溫資料", 'error');
-            } catch (error) { showToast("氣象資料取得失敗", 'error'); }
-        };
-
-        if (typeof searchQuery === 'string' && searchQuery.trim()) {
-            showToast('搜尋地點中...', 'info');
-            try {
-                const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=json&limit=1&accept-language=zh-TW`);
-                const geoData = await geoRes.json();
-                if (geoData && geoData.length > 0) {
-                    const lat = geoData[0].lat;
-                    const lon = geoData[0].lon;
-                    const traditionalQuery = await toTraditionalAsync(searchQuery.trim());
-                    fetchWeather(lat, lon, traditionalQuery); 
-                } else {
-                    showToast('找不到該地點，請嘗試其他關鍵字', 'error');
-                }
-            } catch (e) {
-                showToast('地點搜尋失敗', 'error');
-            }
-            return;
-        }
-
-        if (!navigator.geolocation) { showToast("無定位功能，使用臺北市松山區", 'info'); fetchWeather(25.058, 121.558, '臺北市松山區'); return; }
-        navigator.geolocation.getCurrentPosition(p => fetchWeather(p.coords.latitude, p.coords.longitude), 
-            () => { showToast("無法定位，使用臺北市松山區", 'info'); fetchWeather(25.058, 121.558, '臺北市松山區'); }, { timeout: 5000 });
-    }, [date, dispatch, showToast]);
-};
-
-const useContactBookForm = () => {
-    const [formData, dispatch] = useReducer(formReducer, getInitialFormData());
-    const [dateInfo, setDateInfo] = useState({});
-
-    const getHolidayInfo = useCallback((dateStr) => {
-        if (!dateStr) return {};
-        const [y, m, d] = dateStr.split('-');
-        const { isHoliday, holidayName, familyName, isMakeUp, weekDay } = getDateStatus(parseInt(y), parseInt(m), parseInt(d));
-        const dayNames = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
-        return { dayLabel: dayNames[weekDay], holidayName, familyName, isMakeUp, isHoliday, isWeekend: weekDay === 0 || weekDay === 6 };
-    }, []);
-
-    useEffect(() => { setDateInfo(getHolidayInfo(formData.date)); }, [formData.date, getHolidayInfo]);
-
-    const handleChange = useCallback((e) => {
-        const { name, value, type, checked } = e.target;
-        dispatch({ type: ACTIONS.UPDATE_FIELD, payload: { name, value: type === 'checkbox' ? checked : value } });
-    }, []);
-
-    const handleTimeReset = useCallback((name) => { dispatch({ type: ACTIONS.UPDATE_FIELD, payload: { name, value: '' } }); }, []);
-    const handleJumpToToday = useCallback(() => { dispatch({ type: ACTIONS.RESET_DATE_TO_TODAY }); }, []);
-
-    const listOps = useMemo(() => ({
-        add: (key, item) => {
-            const id = Date.now();
-            const newItem = { ...item, id };
-            dispatch({ type: ACTIONS.ADD_ITEM, key, item: newItem });
-            return id;
-        },
-        remove: (key, id) => dispatch({ type: ACTIONS.REMOVE_ITEM, key, id }),
-        update: (key, id, field, value) => dispatch({ type: ACTIONS.UPDATE_ITEM, key, id, field, value }),
-        resetFields: (key, id, fields) => dispatch({ type: ACTIONS.RESET_ITEM_FIELDS, payload: { key, id, fields } }),
-    }), []);
-
-    const handlers = useMemo(() => ({
-        updateBowelType: (id, value) => dispatch({ type: ACTIONS.UPDATE_BOWEL_TYPE, payload: { id, value, time: getCurrentTime() } }),
-        toggleWakeUpBreastfeeding: (checked, time) => dispatch({ type: ACTIONS.TOGGLE_WAKE_UP_BREASTFEEDING, payload: { checked, time: time || getCurrentTime() } }),
-        toggleAwakeBreastfeeding: (id, checked, time) => dispatch({ type: ACTIONS.TOGGLE_AWAKE_IS_BREASTFEEDING, payload: { id, checked, time } }),
-        toggleBedtimeBreastfeeding: (checked, time) => dispatch({ type: ACTIONS.TOGGLE_BEDTIME_BREASTFEEDING, payload: { checked, time: time || getCurrentTime() } }),
-        toggleNapBreastfeeding: (id, checked, startTime, isNap) => dispatch({ type: ACTIONS.TOGGLE_NAP_IS_BREASTFEEDING, payload: { id, checked, time: startTime, isNap } }),
-        toggleNapIsNap: (id, checked) => dispatch({ type: ACTIONS.TOGGLE_NAP_IS_NAP, payload: { id, checked } }),
-        toggleBreastfeedingNap: (id, checked, time) => dispatch({ type: ACTIONS.TOGGLE_BREASTFEEDING_IS_NAP, payload: { id, checked, time } }),
-        handleMealReset: (meal) => dispatch({ type: ACTIONS.RESET_MEAL, payload: { meal } }),
-        deleteLinkedRecord: (listKey, id) => dispatch({ type: ACTIONS.DELETE_LINKED_RECORD, payload: { listKey, id } })
-    }), []);
-
-    return { formData, dispatch, handleChange, handleTimeReset, handleJumpToToday, listOps, handlers, dateInfo };
-};
-
-const useFirebaseSync = (formData, dispatch) => {
-    const [user, setUser] = useState(null);
-    const [syncStatus, setSyncStatus] = useState('idle');
-    const [isLoaded, setIsLoaded] = useState(false);
-    const [isAuthLoading, setIsAuthLoading] = useState(true);
-    // 🌟 新增：記錄當前的登入模式 (family 或 local)
-    const [authMode, setAuthMode] = useState(() => {
-        if (typeof window !== 'undefined') return localStorage.getItem('contact-book-auth-mode') || null;
-        return null;
-    });
-    const isRemoteUpdate = useRef(false);
-    const saveTimeoutRef = useRef(null);
-    const loadedDateRef = useRef(null);
-    const lastSyncedDataRef = useRef(''); 
-
-    useEffect(() => {
-        if (!auth) {
-            setIsAuthLoading(false);
-            return;
-        }
-        const unsubscribe = onAuthStateChanged(auth, (u) => {
-            setUser(u);
-            setIsAuthLoading(false);
-            if (u && authMode) localStorage.setItem('contact-book-auth-mode', authMode);
-        });
-
-        // 如果選擇單機模式且未登入，執行匿名登入
-        if (authMode === 'local' && !user) {
-             signInAnonymously(auth).catch((e) => {
-                 if (e.code === 'auth/operation-not-allowed') {
-                     setAuthMode(null);
-                     localStorage.removeItem('contact-book-auth-mode');
-                 }
-             });
-        }
-        return () => unsubscribe();
-    }, [authMode, user]);
-
-    useEffect(() => {
-        if (!user || !formData.date || !db) return;
-        setIsLoaded(false); 
-        loadedDateRef.current = null;
-        setSyncStatus('syncing');
-        const unsub = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'handover_records', `handover_${formData.date}`), (snap) => {
-            if (snap.exists()) {
-                const d = snap.data();
-                const localDataForCompare = { ...formData };
-                delete localDataForCompare.lastUpdated;
-                const remoteDataForCompare = { ...getInitialFormData(), date: formData.date, ...d };
-                delete remoteDataForCompare.lastUpdated;
-
-                if (JSON.stringify(localDataForCompare) !== JSON.stringify(remoteDataForCompare)) {
-                    isRemoteUpdate.current = true;
-                    dispatch({ type: ACTIONS.SET_FULL_DATA, payload: { ...getInitialFormData(), date: formData.date, ...d }});
-                    lastSyncedDataRef.current = JSON.stringify(remoteDataForCompare); 
-                    setSyncStatus('saved');
-                    setTimeout(() => { isRemoteUpdate.current = false; }, 500);
-                } else {
-                    lastSyncedDataRef.current = JSON.stringify(localDataForCompare); 
-                }
-            } else {
-                 const defaultData = { ...getInitialFormData(), date: formData.date };
-                 delete defaultData.lastUpdated;
-                 lastSyncedDataRef.current = JSON.stringify(defaultData); 
-            }
-            loadedDateRef.current = formData.date;
-            setIsLoaded(true); 
-            if (syncStatus === 'syncing') setSyncStatus('saved');
-        }, (err) => { console.error(err); setSyncStatus('error'); });
-        return () => unsub();
-    }, [user, formData.date]); 
-
-    useEffect(() => {
-        if (loadedDateRef.current !== formData.date) return;
-        if (isRemoteUpdate.current || !user || !db || !isLoaded) return;
-        
-        const localDataForCompare = { ...formData };
-        delete localDataForCompare.lastUpdated;
-        if (JSON.stringify(localDataForCompare) === lastSyncedDataRef.current) return;
-
-        setSyncStatus('saving');
-        clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = setTimeout(async () => {
-            try {
-                await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'handover_records', `handover_${formData.date}`), { ...formData, lastUpdated: new Date().toISOString() });
-                lastSyncedDataRef.current = JSON.stringify(localDataForCompare); 
-                setSyncStatus('saved');
-            } catch (e) { setSyncStatus('error'); }
-        }, 500);
-    }, [formData, user, isLoaded]); 
-
-    return { user, syncStatus, isLoaded, isAuthLoading, authMode, setAuthMode };
-};
-
-const useRecordedDates = (user) => {
-    const [recordedDates, setRecordedDates] = useState([]);
-    useEffect(() => {
-        if (!user || !db) return;
-        const q = collection(db, 'artifacts', appId, 'users', user.uid, 'handover_records');
-        const unsub = onSnapshot(q, (snap) => {
-            const dates = [];
-            snap.forEach(doc => {
-                const d = doc.data().date;
-                if (d) dates.push(d);
-            });
-            setRecordedDates(dates);
-        }, (err) => console.error(err));
-        return () => unsub();
-    }, [user]);
-    return recordedDates;
-};
-
-// 新增：區塊收合/展開 Hook
-const useSectionExpand = (sectionId, date, hasData, forceExpand = false) => {
-    const [isExpanded, setIsExpanded] = useState(forceExpand || hasData);
-    
-    // 當日期切換，或是資料的「有無狀態」發生改變時，自動展開或收合
-    useEffect(() => {
-        setIsExpanded(forceExpand || hasData);
-    }, [date, forceExpand, hasData]);
-
-    // 監聽來自上方導覽列的點擊事件，自動展開被點擊的區塊
-    useEffect(() => {
-        const handleExpand = (e) => {
-            if (e.detail === sectionId) setIsExpanded(true);
-        };
-        window.addEventListener('expandSection', handleExpand);
-        return () => window.removeEventListener('expandSection', handleExpand);
-    }, [sectionId]);
-
-    const toggle = useCallback(() => setIsExpanded(p => !p), []);
-    return [isExpanded, toggle];
 };
 
 
@@ -642,7 +79,6 @@ const ErrorModal = ({ content, onClose }) => (
     <Modal onClose={onClose}><div className="p-6"><h3 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2"><AlertCircle className="w-6 h-6 text-red-600"/>無法匯入</h3><p className="text-gray-600 mb-6 text-base leading-relaxed">{content}</p><div className="flex justify-end"><button onClick={onClose} className="px-4 py-2 text-white bg-red-600 hover:bg-red-700 rounded-lg font-medium">知道了</button></div></div></Modal>
 );
 
-// 🌟 新增：登入畫面元件
 const LoginScreen = ({ onLoginFamily, onLoginLocal, isAuthenticating, loginError }) => {
     const [password, setPassword] = useState('');
 
@@ -771,7 +207,6 @@ const HistoryModal = ({ recordedDates, currentDate, onSelectDate, onClose }) => 
     );
 };
 
-// 更新：SectionHeader 加入展開/收合事件與動畫箭頭
 const SectionHeader = React.memo(({ id, title, icon: Icon, colorClass, bgClass, onScrollTop, isExpanded, onToggle }) => (
     <div 
         className={`flex items-center justify-between border-b ${colorClass.replace('text', 'border')} pb-2 cursor-pointer select-none group`} 
@@ -807,7 +242,6 @@ const TimeSelect = React.memo(({ value, onChange, name, className }) => {
     </div>);
 });
 
-// CustomCalendar & RocDateSelect Components
 const CustomCalendar = React.memo(({ value, onChange, onClose, recordedDates = [] }) => {
   const [viewDate, setViewDate] = useState(() => value ? new Date(value) : new Date());
   const year = viewDate.getFullYear();
@@ -889,7 +323,6 @@ const RadioGroup = ({ name, options, value, onChange, color='blue', customInput=
     <div className="flex flex-wrap gap-3 items-center">{options.map(opt => { const isObj = typeof opt === 'object'; const val = isObj ? opt.value : opt; const label = isObj ? opt.label : opt; return (<label key={val} className={`flex items-center gap-1 cursor-pointer select-none hover:text-${color}-800 dark:hover:text-${color}-300 text-gray-700 dark:text-gray-300`}><input type="radio" name={name} value={val} checked={value === val} onChange={onChange} onClick={e => value === val && onChange({target:{name, value:''}})} className={`text-${color}-600 focus:ring-${color}-500`} /><span className="text-sm">{label}</span></label>)})}{customInput && value === (typeof options[options.length - 1] === 'object' ? options[options.length - 1].value : options[options.length - 1]) && customInput}</div>
 );
 
-// 抽出單一方向 (出發/返程) 的交通資訊區塊元件
 const TripDirectionBlock = React.memo(({ title, timeName, timeValue, transName, transValue, customName, customValue, handleChange, handleTimeReset }) => (
     <div className="space-y-3 p-3 bg-white dark:bg-gray-800 rounded border border-slate-100 dark:border-slate-700 shadow-sm">
         <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{title}</span>
@@ -925,7 +358,6 @@ const TripDirectionBlock = React.memo(({ title, timeName, timeValue, transName, 
     </div>
 ));
 
-// 共用的交通方式區塊元件
 const TransportationBlock = React.memo(({ formData, handleChange, handleTimeReset, prefix = '', className = '', isLocked = false }) => {
     const depTime = prefix ? `${prefix}DepartureTripTime` : 'departureTripTime';
     const depTrans = prefix ? `${prefix}DepartureTripTransportation` : 'departureTripTransportation';
@@ -936,7 +368,7 @@ const TransportationBlock = React.memo(({ formData, handleChange, handleTimeRese
     const defaultBg = className || 'bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-800';
 
     const hasData = !!(formData[depTime] || formData[depTrans] || formData[depTransCustom] || formData[retTime] || formData[retTrans] || formData[retTransCustom]);
-    const [isExpanded, setIsExpanded] = useState(hasData);
+    const [isExpanded, setIsExpanded] = useSectionExpand(prefix || 'basic', formData.date, hasData);
 
     return (
         <div className={`p-4 rounded-lg border transition-all duration-300 ${defaultBg}`}>
@@ -971,7 +403,6 @@ const TransportationBlock = React.memo(({ formData, handleChange, handleTimeRese
     );
 });
 
-// 新增：抽出共用的飲食區塊 (早、午、晚餐)
 const MealBlock = React.memo(({ title, mealType, formData, handleChange, handlers, referCheckbox = null, isFaded = false }) => {
     const mealTimeName = `meal${mealType}Time`;
     const appetiteName = `appetite${mealType}`;
@@ -1000,7 +431,6 @@ const MealBlock = React.memo(({ title, mealType, formData, handleChange, handler
     );
 });
 
-// --- Sub-Lists ---
 const SymptomList = React.memo(({ symptoms, listOps, showToast, scrollToElement, handlers }) => (
     <div id="symptom-list" className="bg-red-50 dark:bg-red-950 p-4 rounded-lg border border-red-100 dark:border-red-900">
         <div className="flex justify-between items-center mb-2"><span className="font-bold text-red-800 dark:text-red-300">不適症狀</span><button type="button" onClick={()=>listOps.add('symptoms', {time:'', desc:'', isFever:false, feverTemp:''})} className="bg-red-200 dark:bg-red-900/50 px-2 py-1 rounded text-xs flex items-center gap-1 text-red-800 dark:text-red-300"><PlusCircle className="w-3 h-3"/> 新增</button></div>
@@ -1342,7 +772,6 @@ const HealthCheckList = React.memo(({ records, listOps }) => (
         ))}
     </div>
 ));
-// --- End Sub-Lists ---
 
 const BasicSection = React.memo(({ formData, handleChange, dateInfo, handleJumpToToday, handleAutoWeather, handleTimeReset, listOps, onScrollTop, handlers, isLocked, recordedDates }) => {
     const handleWeather = (w) => {
@@ -1882,7 +1311,6 @@ const HealthSection = React.memo(({ formData, handleChange, listOps, showToast, 
 });
 
 const NotesSection = React.memo(({ formData, handleChange, onScrollTop, generatedText, onCopy, copySuccess, isLocked }) => {
-    // 全域資料判斷：只要整個表單有任何輸入，就回傳 true
     const globalHasData = useMemo(() => {
         const ignoredKeys = ['date', 'weatherSearchQuery', 'isLocked', 'lastUpdated'];
         for (const key in formData) {
@@ -1897,15 +1325,12 @@ const NotesSection = React.memo(({ formData, handleChange, onScrollTop, generate
 
     const [isExpanded, toggle] = useSectionExpand('notes', formData.date, globalHasData);
 
-    // --- 新增：備註欄位的防抖 (Debounce) 處理 ---
     const [localNotes, setLocalNotes] = useState(formData.notes || '');
 
-    // 當外部資料改變時 (例如切換日期、或是剛載入雲端資料)，同步更新本地狀態
     useEffect(() => {
         setLocalNotes(formData.notes || '');
     }, [formData.notes]);
 
-    // 當本地打字時，延遲 500 毫秒後才更新到全域 formData (觸發重新渲染與存檔)
     useEffect(() => {
         const timer = setTimeout(() => {
             if (localNotes !== (formData.notes || '')) {
@@ -1918,7 +1343,6 @@ const NotesSection = React.memo(({ formData, handleChange, onScrollTop, generate
     const handleLocalNotesChange = useCallback((e) => {
         setLocalNotes(e.target.value);
     }, []);
-    // -------------------------------------------
 
     return (
         <section id="notes" className="scroll-mt-28 pt-4 border-t-2 border-gray-500">
@@ -1952,7 +1376,6 @@ const NotesSection = React.memo(({ formData, handleChange, onScrollTop, generate
                     <div className="p-3 sm:p-6 bg-slate-900">
                         <div id="preview-text-container" className="font-mono text-sm sm:text-[18px] leading-relaxed sm:leading-[32px] text-slate-300 min-h-[200px] w-full">
                         {generatedText ? generatedText.split('\n').map((line, index) => {
-                            // 動態偵測每行開頭的標題與全形冒號，或是空白與清單符號
                             let prefix = '';
                             const headerMatch = line.match(/^([^：\n(]{1,30}：)/);
                             if (headerMatch) {
@@ -2040,8 +1463,8 @@ const FileSection = React.memo(({ onExportJSON, onImportJSON, onClearToday, onCl
 const App = () => {
   const { toast, showToast, setToast } = useToast();
   const { formData, dispatch, handleChange, handleTimeReset, handleJumpToToday, listOps, handlers, dateInfo } = useContactBookForm();
-  const { user, syncStatus, isLoaded, isAuthLoading, authMode, setAuthMode } = useFirebaseSync(formData, dispatch);
-  const recordedDates = useRecordedDates(user);
+  const { user, syncStatus, isLoaded, isAuthLoading, authMode, setAuthMode } = useFirebaseSync(formData, dispatch, auth, db, appId);
+  const recordedDates = useRecordedDates(user, db, appId);
   
   const [copySuccess, setCopySuccess] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
@@ -2335,7 +1758,7 @@ const App = () => {
           const canvas = await window.html2canvas(element, { 
               scale: 2, 
               backgroundColor: '#0f172a',
-              windowWidth: 800, // 強制模擬電腦版寬度，防止手機版提早換行
+              windowWidth: 800, 
               onclone: (clonedDoc) => {
                   const clonedElement = clonedDoc.getElementById('capture-text');
                   if (clonedElement) {
@@ -2394,7 +1817,6 @@ const App = () => {
           const originalCaptureText = document.getElementById('capture-text');
           if (!originalCaptureText) throw new Error("找不到預覽區塊");
 
-          // 創建固定的 800px 隱藏容器，確保排版不被手機版破壞
           const hiddenContainer = document.createElement('div');
           hiddenContainer.style.position = 'fixed';
           hiddenContainer.style.left = '-9999px';
@@ -2418,7 +1840,6 @@ const App = () => {
               const preElement = clonedNode.querySelector('#preview-text-container');
               if (preElement) {
                   preElement.innerHTML = '';
-                  // 設定圖片內的字體樣式
                   preElement.style.fontSize = '30px';
                   preElement.style.lineHeight = '52px';
                   preElement.style.padding = '36px';
@@ -2427,13 +1848,11 @@ const App = () => {
                   if (!text) {
                       preElement.innerText = '尚無內容';
                   } else {
-                      // 將文字轉為 Flex 排版，完美對齊
                       text.split('\n').forEach(line => {
                           const div = document.createElement('div');
                           div.style.minHeight = '1.5em';
                           div.style.width = '100%';
                           
-                          // 與網頁版相同的進階對齊邏輯
                           let prefix = '';
                           const headerMatch = line.match(/^([^：\n(]{1,30}：)/);
                           if (headerMatch) {
@@ -2476,7 +1895,7 @@ const App = () => {
               const canvas = await window.html2canvas(clonedNode, { 
                   scale: 2, 
                   backgroundColor: '#0f172a',
-                  windowWidth: 800 // 強制模擬電腦寬度
+                  windowWidth: 800 
               });
               const imgData = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
               imgFolder.file(`ContactBook_${getRocFileNameDate(data.date)}.jpg`, imgData, {base64: true});
