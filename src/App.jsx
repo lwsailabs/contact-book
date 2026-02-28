@@ -19,6 +19,12 @@ import {
   doc, setDoc, getDocs, collection, onSnapshot, writeBatch, deleteDoc
 } from 'firebase/firestore';
 
+// --- 新增：第一階段模組化匯入 ---
+import { HOLIDAYS_CONFIG, MAKE_UP_DAYS, HOURS, MINUTES, ACTIONS, OPTIONS } from './constants/config';
+import { getDateStatus, getTaiwanTimeParts, formatRocDate, getCurrentTime, sortListHelper, getInitialFormData } from './utils/helpers';
+import { generateReportText } from './utils/reportGenerator';
+// ---------------------------------
+
 // --- 1. Global Initialization & Config ---
 // 👇 準備佈署到 GitHub: 請將下方的 myFirebaseConfig 替換為您在 Firebase 主控台取得的真實設定檔
 const myFirebaseConfig = {
@@ -49,163 +55,6 @@ if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== "請將
 // 👨‍👩‍👦 家庭共用帳號設定 (請填入您在 Firebase 後台建立的 Email)
 const FAMILY_ACCOUNT = {
   email: 'family@contactbook.com' // 👈 已經幫您修改成正確的信箱囉！
-};
-
-// --- CONSTANTS & CONFIGURATIONS ---
-const HOLIDAYS_CONFIG = {
-    '01-01': '元旦', '02-16': '除夕', '02-17': '春節(初一)', '02-18': '春節(初二)', 
-    '02-19': '春節(初三)', '02-20': '春節(初四)', '02-27': '補假', '02-28': '和平紀念日',
-    '04-03': '補假', '04-04': '兒童/清明', '04-05': '清明節', '04-06': '補假', 
-    '05-01': '勞動節', '06-19': '端午節', '09-25': '中秋節', '10-09': '補假', 
-    '10-10': '國慶日', '10-25': '光復節', '10-26': '補假',
-};
-
-const MAKE_UP_DAYS = [];
-
-const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
-const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
-
-const ACTIONS = {
-  SET_FULL_DATA: 'SET_FULL_DATA',
-  UPDATE_FIELD: 'UPDATE_FIELD',
-  RESET_DATE_TO_TODAY: 'RESET_DATE_TO_TODAY',
-  ADD_ITEM: 'ADD_ITEM',
-  REMOVE_ITEM: 'REMOVE_ITEM',
-  UPDATE_ITEM: 'UPDATE_ITEM',
-  RESET_MEAL: 'RESET_MEAL',
-  RESET_ITEM_FIELDS: 'RESET_ITEM_FIELDS',
-  DELETE_LINKED_RECORD: 'DELETE_LINKED_RECORD',
-  UPDATE_BOWEL_TYPE: 'UPDATE_BOWEL_TYPE',
-  TOGGLE_WAKE_UP_BREASTFEEDING: 'TOGGLE_WAKE_UP_BREASTFEEDING',
-  TOGGLE_NAP_IS_BREASTFEEDING: 'TOGGLE_NAP_IS_BREASTFEEDING',
-  TOGGLE_NAP_IS_NAP: 'TOGGLE_NAP_IS_NAP',
-  TOGGLE_BREASTFEEDING_IS_NAP: 'TOGGLE_BREASTFEEDING_IS_NAP',
-  TOGGLE_AWAKE_IS_BREASTFEEDING: 'TOGGLE_AWAKE_IS_BREASTFEEDING',
-  TOGGLE_BEDTIME_BREASTFEEDING: 'TOGGLE_BEDTIME_BREASTFEEDING'
-};
-
-const OPTIONS = {
-  WEATHER: ['晴', '舒適', '陰', '雨', '寒冷', '颱風'],
-  HANDOVER: ['本日無交接', '爸爸交接給媽媽', '媽媽交接給爸爸', '其它'],
-  LOCATIONS: ['爸爸住所', '媽媽住所', '其它'],
-  IS_OVERNIGHT: ['是', '否'],
-  LEAVE_TYPES: ['放假', '寒假', '暑假', '病假', '事假', '半天', '其它'],
-  COMPANIONS: ['爸爸接送', '媽媽接送', '共同接送'],
-  APPETITE: ['正常', '普通', '略少', '不佳', '非常棒'],
-  WATER: ['正常', '略少', '不佳', '非常棒'],
-  BOWEL_TYPES: ['正常', '粒狀/便秘', '稀狀/偏軟', '拉肚子/腸胃炎'],
-  HEALTH_CARD: [
-    { value: 'card_at_dad', label: '卡片在爸爸這' },
-    { value: 'card_at_mom', label: '卡片在媽媽這' },
-    { value: 'dad_to_mom', label: '爸爸交給媽媽' },
-    { value: 'mom_to_dad', label: '媽媽交給爸爸' }
-  ],
-  ORAL_TIMES: ['早上', '中午', '晚上'],
-  ORAL_TYPES: ['刷牙', '漱口'],
-  MOODS: [
-    { value: '開心', label: '😃 開心' },
-    { value: '穩定', label: '😊 穩定' },
-    { value: '哭鬧', label: '😭 哭鬧' },
-    { value: '生氣', label: '😡 生氣' },
-    { value: '崩潰', label: '😱 崩潰' },
-    { value: '害怕', label: '😨 害怕' },
-    { value: '焦慮', label: '😰 焦慮' },
-    { value: '興奮', label: '😆 興奮' },
-    { value: '疲累', label: '😴 疲累' }
-  ],
-  ACTIVITY_TYPES: ['室內', '戶外'],
-  RECORDERS: ['爸爸', '媽媽', '共同記錄'],
-  TRANSPORTATION: ['飛機', '高鐵', '臺鐵', '公車', '計程車', '步行', '開車', '騎車', '其它']
-};
-
-// --- 2. Helper Functions ---
-const getDateStatus = (year, month, day) => {
-    const md = `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const dateObj = new Date(year, month - 1, day);
-    const weekDay = dateObj.getDay(); 
-    const holidayName = HOLIDAYS_CONFIG[md] || '';
-    let familyName = '';
-    if (md === '10-16') { const age = year - 2023; familyName = age === 0 ? '兒子誕生' : `兒子${age}歲生日`; }
-    if (md === '02-27') familyName = '爸爸生日';
-    if (md === '08-31') familyName = '媽媽生日';
-    if (md === '08-08') familyName = '父親節';
-    if (month === 5 && weekDay === 0 && day >= 8 && day <= 14) familyName = '母親節';
-    const isMakeUp = MAKE_UP_DAYS.includes(md);
-    const isHoliday = (!!holidayName || weekDay === 0 || weekDay === 6) && !isMakeUp;
-    return { isHoliday, holidayName, familyName, isMakeUp, weekDay };
-};
-
-const getTaiwanTimeParts = (date = new Date()) => {
-  const formatter = (options) => date.toLocaleString('en-US', { timeZone: 'Asia/Taipei', ...options });
-  return {
-    year: parseInt(formatter({ year: 'numeric' })),
-    month: formatter({ month: '2-digit' }).padStart(2, '0'),
-    day: formatter({ day: '2-digit' }).padStart(2, '0'),
-    hour: formatter({ hour: '2-digit', hour12: false }).replace(/^24/, '00').padStart(2, '0'),
-    minute: formatter({ minute: '2-digit' }).padStart(2, '0')
-  };
-};
-
-const formatRocDate = (dateStr) => {
-  if (!dateStr) return '';
-  const [y, m, d] = dateStr.split('-');
-  const dateObj = new Date(dateStr);
-  const weekDays = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
-  const weekDay = weekDays[dateObj.getDay()];
-  const { holidayName, familyName } = getDateStatus(parseInt(y), parseInt(m), parseInt(d));
-  let info = weekDay;
-  if (holidayName) info += ` / ${holidayName}`;
-  if (familyName) info += ` / ${familyName}`;
-  return `${parseInt(y) - 1911}年${m}月${d}日 ${info}`;
-};
-
-const getCurrentTime = () => {
-    const t = getTaiwanTimeParts();
-    return `${t.hour}:${t.minute}`;
-};
-
-const sortListHelper = (list) => {
-    if (!Array.isArray(list)) return [];
-    return [...list].sort((a, b) => {
-        const prevA = a.isPreviousDay || false;
-        const prevB = b.isPreviousDay || false;
-        if (prevA !== prevB) return prevA ? -1 : 1;
-        const getTime = (item) => {
-             if (item.time === '早上') return '06:00';
-             if (item.time === '中午') return '12:00';
-             if (item.time === '晚上') return '18:00';
-             if (item.time) return item.time;
-             if (item.startTime) return item.startTime;
-             return '99:99'; 
-        };
-        return getTime(a).localeCompare(getTime(b));
-    });
-};
-
-const getInitialFormData = () => {
-  const t = getTaiwanTimeParts();
-  return {
-    date: `${t.year}-${t.month}-${t.day}`,
-    time: '', weather: '', weatherTempMin: '', weatherTempMax: '', weatherLocation: '', weatherSearchQuery: '',
-    location: '', locationCustom: '', handoverItems: '', handoverSituation: '', handoverSituationCustom: '', 
-    isOvernight: '', overnightStartDate: '', overnightEndDate: '', departureTripTime: '', departureTripTransportation: '', departureTripTransportationCustom: '', returnTripTime: '', returnTripTransportation: '', returnTripTransportationCustom: '',
-    schoolDepartureTripTime: '', schoolDepartureTripTransportation: '', schoolDepartureTripTransportationCustom: '', schoolReturnTripTime: '', schoolReturnTripTransportation: '', schoolReturnTripTransportationCustom: '',
-    activityDepartureTripTime: '', activityDepartureTripTransportation: '', activityDepartureTripTransportationCustom: '', activityReturnTripTime: '', activityReturnTripTransportation: '', activityReturnTripTransportationCustom: '',
-    schoolLeaveType: '', schoolLeaveOther: '', schoolLeaveHalfDayDesc: '', schoolLeavePersonalDesc: '', schoolLeaveSickDesc: '', 
-    schoolNotes: '', schoolArrivalTime: '', schoolArrivalCompanion: '', schoolDepartureTime: '', schoolDepartureCompanion: '',
-    mealBreakfast: '', mealBreakfastTime: '', waterBreakfast: '', appetiteBreakfast: '',
-    mealLunch: '', mealLunchTime: '', waterLunch: '', appetiteLunch: '', lunchReferToSchool: false,
-    mealDinner: '', mealDinnerTime: '', waterDinner: '', appetiteDinner: '',
-    snackRecords: [], snackReferToSchool: false, breastfeedingTimes: [],
-    sleepLastNight: '', sleepAwakeRecords: [], sleepWakeUp: '', isWakeUpBreastfeeding: false,
-    sleepBedtime: '', isBedtimeBreastfeeding: false, sleepActualTime: '', sleepActualReason: '', 
-    napRecords: [], napReferToSchool: false, bowelMovements: [], bowelReferToSchool: false, isNoBowelMovement: false, 
-    emotionRecords: [], activityRecords: [], oralCareRecords: [], oralCareReferToSchool: false,
-    symptoms: [], injuryRecords: [], medicalLocations: [], healthCheckRecords: [], medications: [], healthCardStatus: '',
-    notes: '', recorder: '', childArrivalRecordsBasic: [], childArrivalRecordsSchool: [], childArrivalRecordsActivity: [],
-    isLocked: false,
-    lastUpdated: null
-  };
 };
 
 // --- Logic Layer: Reducer Handlers ---
@@ -500,241 +349,6 @@ const actionHandlers = {
 const formReducer = (state, action) => {
     const handler = actionHandlers[action.type];
     return handler ? handler(state, action) : state;
-};
-
-// --- Report Generation Helpers ---
-const getTransportText = (depTime, depTrans, depTransCustom, retTime, retTrans, retTransCustom, indent = '   ') => {
-    let transportText = '';
-    // 智慧判斷：如果縮排較深 (5格以上)，子項目使用 •，否則使用 -
-    const symbol = indent.length >= 5 ? '•' : '-';
-    if (depTime || depTrans) {
-        let depStr = depTrans || '';
-        if (depStr.includes('其它') && depTransCustom) {
-            depStr = depStr.replace('其它', `其它(${depTransCustom})`);
-        }
-        transportText += `${indent}${symbol} 出發：${depTime || '??:??'} ${depStr}\n`;
-    }
-    if (retTime || retTrans) {
-        let retStr = retTrans || '';
-        if (retStr.includes('其它') && retTransCustom) {
-            retStr = retStr.replace('其它', `其它(${retTransCustom})`);
-        }
-        transportText += `${indent}${symbol} 返程：${retTime || '??:??'} ${retStr}\n`;
-    }
-    return transportText;
-};
-
-const formatBasicReport = (formData, dateInfo) => {
-    const loc = formData.location === '其它' ? formData.locationCustom : formData.location;
-    let text = `【親子成長聯絡簿】\n\n📅 日期：${formatRocDate(formData.date)} ${formData.time}\n`;
-    
-    let wParts = [];
-    if (formData.weather) wParts.push(formData.weather);
-    if (formData.weatherTempMin || formData.weatherTempMax) wParts.push(`${formData.weatherTempMin || '?'}°C ~ ${formData.weatherTempMax || '?'}°C`);
-    if (formData.weatherLocation) wParts.push(`(${formData.weatherLocation})`);
-    if (wParts.length > 0) text += `🌤️ 天氣：${wParts.join(' ')}\n`;
-
-    const handoverStr = formData.handoverSituation === '其它' ? `${formData.handoverSituation} (${formData.handoverSituationCustom})` : formData.handoverSituation;
-    if (handoverStr) text += `🤝 交接：${handoverStr}\n`; 
-    if (loc) text += `📍 地點：${loc}\n`;
-    if (formData.handoverItems) text += `🎒 物品：${formData.handoverItems}\n`;
-    if (formData.isOvernight) {
-        text += `🌙 過夜：${formData.isOvernight}${formData.isOvernight === '是' ? ` 【${formatRocDate(formData.overnightStartDate || formData.date)} ~ ${formatRocDate(formData.overnightEndDate || formData.date)}】` : ''}\n`;
-    }
-    
-    const basicTransport = getTransportText(formData.departureTripTime, formData.departureTripTransportation, formData.departureTripTransportationCustom, formData.returnTripTime, formData.returnTripTransportation, formData.returnTripTransportationCustom, '   ');
-    if (basicTransport) {
-        text += `🚗 交通方式：\n${basicTransport}`;
-    }
-
-    formData.childArrivalRecordsBasic?.forEach(r => { const aloc = r.location === '其它' ? r.locationCustom : r.location; if (r.time || aloc) text += `🏠 小孩已於 ${r.time || '??:??'} 抵達 ${aloc || '???'}\n`; });
-    
-    return text.trimEnd();
-};
-
-const formatSchoolReport = (formData) => {
-    let schoolText = '';
-    if (formData.schoolLeaveType) {
-        let lt = formData.schoolLeaveType;
-        if (lt === '其它') lt += ` (${formData.schoolLeaveOther})`;
-        else if (lt === '半天') lt += ` (${formData.schoolLeaveHalfDayDesc})`;
-        else if (lt === '事假') lt += ` (${formData.schoolLeavePersonalDesc})`;
-        else if (lt === '病假') lt += ` (${formData.schoolLeaveSickDesc})`;
-        schoolText += `   - 假別：${lt}\n`;
-    }
-    if (formData.schoolNotes) schoolText += `   - 校方的話：${formData.schoolNotes}\n`;
-    if (formData.schoolArrivalTime) schoolText += `   - 到校：${formData.schoolArrivalTime} ${formData.schoolArrivalCompanion ? `(${formData.schoolArrivalCompanion})` : ''}\n`;
-    if (formData.schoolDepartureTime) schoolText += `   - 放學：${formData.schoolDepartureTime} ${formData.schoolDepartureCompanion ? `(${formData.schoolDepartureCompanion})` : ''}\n`;
-    
-    const schoolTransport = getTransportText(formData.schoolDepartureTripTime, formData.schoolDepartureTripTransportation, formData.schoolDepartureTripTransportationCustom, formData.schoolReturnTripTime, formData.schoolReturnTripTransportation, formData.schoolReturnTripTransportationCustom, '     ');
-    if (schoolTransport) {
-        schoolText += `   - 🚗 交通方式：\n${schoolTransport}`;
-    }
-
-    formData.childArrivalRecordsSchool?.forEach(r => { const aloc = r.location === '其它' ? r.locationCustom : r.location; if (r.time || aloc) schoolText += `   - 🏠 小孩已於 ${r.time || '??:??'} 抵達 ${aloc || '???'}\n`; });
-
-    return schoolText ? `🏫 學校接送資訊：\n${schoolText.trimEnd()}` : '';
-};
-
-const formatActivityReport = (formData) => {
-    let activityText = '';
-    if (formData.activityRecords && formData.activityRecords.length > 0) { formData.activityRecords.forEach(a => { activityText += `   • ${a.time ? `${a.time} ` : ''}${a.location ? `在${a.location} ` : ''}${a.content ? `進行 ${a.content}` : ''} ${a.type ? `(${a.type})` : ''}\n`; }); }
-    
-    if (formData.activityRecords?.some(a => a.type === '戶外')) {
-        const activityTransport = getTransportText(formData.activityDepartureTripTime, formData.activityDepartureTripTransportation, formData.activityDepartureTripTransportationCustom, formData.activityReturnTripTime, formData.activityReturnTripTransportation, formData.activityReturnTripTransportationCustom, '     ');
-        if (activityTransport) {
-            activityText += `   • 🚗 交通方式：\n${activityTransport}`;
-        }
-        formData.childArrivalRecordsActivity?.forEach(r => { const aloc = r.location === '其它' ? r.locationCustom : r.location; if (r.time || aloc) activityText += `   • 🏠 小孩已於 ${r.time || '??:??'} 抵達 ${aloc || '???'}\n`; });
-    }
-
-    return activityText ? `🐾 活動記錄：\n${activityText.trimEnd()}` : '';
-};
-
-const formatDiningReport = (formData) => {
-    let diningText = '';
-    const formatMeal = (name, time, content, appetite, water, isRefer) => {
-        if (!content && !time && !appetite && !water && !isRefer) return '';
-        let c = content; if (isRefer) c = c ? `${c} (參考學校聯絡簿)` : "(參考學校聯絡簿)";
-        let details = []; if(appetite) details.push(`食慾:${appetite}`); if(water) details.push(`水:${water}`);
-        let detailStr = details.length ? ` (${details.join(', ')})` : '';
-        return `   - ${name}：${time ? `(${time}) ` : ''}${c}${detailStr}\n`;
-    };
-    diningText += formatMeal('早餐', formData.mealBreakfastTime, formData.mealBreakfast, formData.appetiteBreakfast, formData.waterBreakfast);
-    diningText += formatMeal('午餐', formData.mealLunchTime, formData.mealLunch, formData.appetiteLunch, formData.waterLunch, formData.lunchReferToSchool);
-    diningText += formatMeal('晚餐', formData.mealDinnerTime, formData.mealDinner, formData.appetiteDinner, formData.waterDinner);
-    if (formData.snackReferToSchool) diningText += `   - 點心：(參考學校聯絡簿)\n`;
-    formData.snackRecords.forEach(s => diningText += formatMeal('點心', s.time, s.content, s.appetite, s.water));
-    if (formData.breastfeedingTimes.length > 0) diningText += `🤱 親餵哺乳：${formData.breastfeedingTimes.map(t => `${t.time}${t.isNap ? '(小睡)' : ''}`).join('、')}\n`;
-
-    return diningText ? `🍽  用餐與飲水：\n${diningText.trimEnd()}` : '';
-};
-
-const formatSleepReport = (formData) => {
-    let sleepText = '';
-    if (formData.sleepLastNight) sleepText += `   - 昨晚就寢：${formData.sleepLastNight}\n`;
-    formData.sleepAwakeRecords.forEach(r => sleepText += `     • 夜醒 ${r.time}${r.asleepTime ? ` ~ ${r.asleepTime}` : ''} : ${r.reason}${r.isBreastfeeding ? " (親餵)" : ""}\n`);
-    if (formData.sleepWakeUp) sleepText += `   - 早上起床：${formData.sleepWakeUp} ${formData.isWakeUpBreastfeeding ? '(親餵)' : ''}\n`;
-    
-    let napHeader = `   - 午休、小睡：`; if (formData.napReferToSchool) napHeader += ` (參考學校聯絡簿)`; 
-    if (formData.napRecords.length > 0 || formData.napReferToSchool) {
-        sleepText += `${napHeader}\n`;
-        formData.napRecords.forEach(n => { const typeLabel = n.isNap ? '小睡' : '午休'; sleepText += `     • ${typeLabel} ${n.startTime} ~ ${n.endTime}${n.isNotAsleep ? ` (沒睡著: ${n.reason})` : ''}\n`; });
-    }
-    if (formData.sleepBedtime) sleepText += `   - 晚上就寢：${formData.sleepBedtime} ${formData.isBedtimeBreastfeeding ? '(親餵)' : ''}\n`;
-    if (formData.sleepActualTime) sleepText += `     • 實際入睡：${formData.sleepActualTime} ${formData.sleepActualReason ? `(${formData.sleepActualReason})` : ''}\n`;
-
-    return sleepText ? `💤 睡眠狀況：\n${sleepText.trimEnd()}` : '';
-};
-
-const formatPhysiologyReport = (formData) => {
-    let text = '';
-    let bowelText = '';
-    if (formData.bowelReferToSchool) bowelText += '   (參考學校聯絡簿)\n';
-    if (formData.isNoBowelMovement) bowelText += `   - 本日無排便\n`;
-    formData.bowelMovements.forEach((bm, i) => bowelText += `   (${i + 1}) ${bm.time} - ${bm.type}\n`);
-    if (bowelText) text += `💩 排便記錄：\n${bowelText.trimEnd()}`;
-    
-    let emotionText = '';
-    if (formData.emotionRecords.length > 0) { formData.emotionRecords.forEach(r => emotionText += `   • ${r.time} ${r.mood} ${r.note ? `(${r.note})` : ''}\n`); }
-    if (emotionText) text += `${text ? '\n\n-------------------\n' : ''}😊 情緒與行為：\n${emotionText.trimEnd()}`;
-    
-    return text;
-};
-
-const formatHealthReport = (formData) => {
-    let healthText = '';
-    if (formData.healthCardStatus) { const statusMap = { 'dad_to_mom': '爸爸交給媽媽', 'mom_to_dad': '媽媽交給爸爸', 'card_at_dad': '卡片在爸爸這', 'card_at_mom': '卡片在媽媽這' }; healthText += `🪪 健保卡：${statusMap[formData.healthCardStatus] || ''}\n`; }
-    if (formData.oralCareRecords.length > 0 || formData.oralCareReferToSchool) { healthText += `   - 口腔保健：${formData.oralCareReferToSchool ? ' (參考學校聯絡簿)' : ''}\n`; formData.oralCareRecords.forEach(r => healthText += `     • ${r.time} ${r.type}\n`); }
-
-    if (formData.symptoms.length > 0) { 
-        healthText += `   - 不適症狀：\n`; 
-        formData.symptoms.forEach(i => { 
-            let details = []; if(i.isFever) details.push(`發燒 ${i.feverTemp || '?'}°C${i.isFeverMedication ? ' (已服藥)' : ''}`); if(i.isDoctorVisited) details.push('已就醫'); if(i.isMedicated) details.push('已服藥');
-            let detailStr = details.length ? ` (${details.join('、')})` : '';
-            let obs = []; if(i.observationTime) obs.push(`觀察:${i.observationTime}`); if(i.isImproved) obs.push('改善'); if(i.isNotImproved) obs.push(`未改善${i.notImprovedReason ? `(${i.notImprovedReason})` : ''}`);
-            let obsStr = obs.length ? ` [${obs.join(' ')}]` : '';
-            healthText += `     • ${i.isPreviousDay?'(前一天)':''} ${i.time} ${i.desc}${detailStr}${obsStr}\n`; 
-        }); 
-    }
-    if (formData.injuryRecords?.length > 0) { 
-        healthText += `   - 受傷記錄：\n`; 
-        formData.injuryRecords.forEach(i => { 
-            let info = []; 
-            if (i.isPreviousDay) info.push('(前一天)');
-            if(i.time) info.push(i.time); 
-            if(i.location) info.push(`@${i.location}`);
-            let content = []; if(i.part) content.push(`部位:${i.part}`); if(i.cause) content.push(`原因:${i.cause}`);
-            let actions = []; if(i.isMedicated) actions.push('已擦藥'); if(i.isDoctorVisited) actions.push('已就醫');
-            let actionStr = actions.length ? ` (${actions.join('、')})` : '';
-            healthText += `     • ${info.join(' ')} ${content.join('，')}${actionStr}\n`; 
-        }); 
-    }
-    if (formData.medications.length > 0) { 
-        healthText += `   - 用藥紀錄：\n`; 
-        formData.medications.forEach(m => { 
-            let type = []; if(m.isInternal) type.push('內服'); if(m.isExternal) type.push('外用');
-            let typeStr = type.length ? `(${type.join('/')})` : '';
-            let obs = []; if(m.isImproved) obs.push('改善'); if(m.isNotImproved) obs.push(`未改善${m.notImprovedReason ? `(${m.notImprovedReason})` : ''}`);
-            let obsStr = obs.length ? ` [${obs.join(' ')}]` : '';
-            healthText += `     • ${m.isPreviousDay?'(前一天)':''} ${m.time} ${typeStr} ${m.name} ${obsStr}\n`; 
-        }); 
-    }
-    if (formData.medicalLocations.length > 0) { 
-        healthText += `   - 就醫資訊：\n`; 
-        formData.medicalLocations.forEach(i => { 
-            let treatments = []; if(i.isVaccine) treatments.push(`疫苗:${i.vaccineName}`); if(i.isInjection) treatments.push('打針'); if(i.isIV) treatments.push('點滴'); if(i.isOtherTreatment) treatments.push(`其它:${i.otherTreatmentDesc}`);
-            let treatStr = treatments.length ? ` -> ${treatments.join('、')}` : '';
-            let reason = i.reason ? ` (${i.reason})` : ''; let note = i.doctorNote ? ` 醫囑:${i.doctorNote}` : ''; let cost = i.cost ? ` $${i.cost}元` : '';
-            let followUpDateStr = i.followUpDate ? formatRocDate(i.followUpDate).split(' ')[0] : '未定';
-            let followUp = i.isFollowUp ? ` [預約回診: ${followUpDateStr}${i.followUpNumber ? ` (${i.followUpNumber}號)` : ''}]` : '';
-            healthText += `     • ${i.time} ${i.desc}${reason}${treatStr}${note}${cost}${followUp}\n`; 
-        }); 
-    }
-    if (formData.healthCheckRecords.length > 0) { 
-        healthText += `   - 健康檢查：\n`; 
-        formData.healthCheckRecords.forEach(c => { 
-            healthText += `     • ${c.time} ${c.checkLocation}\n`; 
-            if(c.height || c.weight) healthText += `       數值: 身高${c.height}cm / 體重${c.weight}kg\n`;
-            if(c.isVaccine) healthText += `       疫苗: ${c.vaccineName}\n`;
-            let eye = []; if(c.leftEyeStatus) eye.push(`左眼:${c.leftEyeStatus==='normal'?'正常':`異常(${c.leftEyeAbnormalReason})`}`); if(c.rightEyeStatus) eye.push(`右眼:${c.rightEyeStatus==='normal'?'正常':`異常(${c.rightEyeAbnormalReason})`}`);
-            if(eye.length) healthText += `       視力: ${eye.join(' / ')}\n`;
-            let oral = []; if(c.oralStatus) oral.push(`檢查:${c.oralStatus==='normal'?'正常':`異常(${c.oralAbnormalReason})`}`); if(c.isOralCare) oral.push(`保健:${c.oralCareItem}`);
-            if(oral.length) healthText += `       牙齒: ${oral.join(' / ')}\n`;
-            if(c.cost) healthText += `       費用: $${c.cost}元\n`;
-            if(c.doctorNote) healthText += `       醫囑: ${c.doctorNote}\n`;
-        }); 
-    }
-
-    return healthText ? `💊 健康與醫療：\n${healthText.trimEnd()}` : '';
-};
-
-const formatFooterReport = (formData) => {
-    let footerText = '';
-    if (formData.notes) footerText += `📝 備註：${formData.notes || ''}\n`;
-    if (formData.recorder) footerText += `✍ 記錄人：${formData.recorder || ''}`;
-    return footerText.trimEnd();
-};
-
-const generateReportText = (formData, dateInfo) => {
-    const sections = [
-        formatBasicReport(formData, dateInfo),
-        formatSchoolReport(formData),
-        formatSleepReport(formData),
-        formatDiningReport(formData),
-        formatPhysiologyReport(formData),
-        formatHealthReport(formData),
-        formatActivityReport(formData)
-    ].filter(Boolean); // 過濾掉空白的區塊
-
-    let report = sections.join('\n-------------------\n');
-    
-    const footer = formatFooterReport(formData);
-    if (footer) {
-        report += `\n-------------------\n${footer}`;
-    }
-    
-    return report;
 };
 
 // --- Hooks ---
@@ -2331,14 +1945,35 @@ const NotesSection = React.memo(({ formData, handleChange, onScrollTop, generate
                                 ${copySuccess ? 'bg-emerald-500 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'}
                             `}
                         >
-                            {copySuccess ? <CheckSquare className="w-4 h-4 sm:w-5 sm:h-5"/> : <Copy className="w-4 h-4 sm:w-5 sm:h-5"/>}
-                            {copySuccess ? '已複製' : '複製'}
+                            {copySuccess ? '複製成功' : '一鍵複製'}
                         </button>
                     </div>
-                    <div className="p-3 sm:p-5 bg-slate-900 overflow-x-auto">
-                        <pre id="report-text" className="whitespace-pre-wrap font-mono text-sm sm:text-base leading-relaxed text-slate-300 min-w-[280px]">
-                            {generatedText || '尚無內容'}
-                        </pre>
+                    
+                    <div className="p-3 sm:p-6 bg-slate-900">
+                        <div id="preview-text-container" className="font-mono text-sm sm:text-[18px] leading-relaxed sm:leading-[32px] text-slate-300 min-h-[200px] w-full">
+                        {generatedText ? generatedText.split('\n').map((line, index) => {
+                            // 動態偵測每行開頭的標題與全形冒號，或是空白與清單符號
+                            let prefix = '';
+                            const headerMatch = line.match(/^([^：\n(]{1,30}：)/);
+                            if (headerMatch) {
+                                prefix = headerMatch[1];
+                            } else {
+                                const listMatch = line.match(/^(\s+(?:[-•]\s|\(\d+\)\s)?)/);
+                                if (listMatch) prefix = listMatch[1];
+                            }
+
+                            if (prefix) {
+                                const content = line.substring(prefix.length);
+                                return (
+                                    <div key={index} className="flex min-h-[1.5em] w-full">
+                                        <span className="whitespace-pre shrink-0">{prefix}</span>
+                                        <span className="break-words flex-1 whitespace-pre-wrap">{content}</span>
+                                    </div>
+                                );
+                            }
+                            return <div key={index} className="break-words min-h-[1.5em] whitespace-pre-wrap w-full">{line}</div>;
+                        }) : <div className="whitespace-pre-wrap">尚無內容</div>}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2686,7 +2321,7 @@ const App = () => {
           if (!window.html2canvas) {
               await new Promise((resolve, reject) => {
                   const script = document.createElement('script');
-                  script.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
+                  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
                   script.onload = resolve;
                   script.onerror = reject;
                   document.head.appendChild(script);
@@ -2697,10 +2332,29 @@ const App = () => {
               showToast('找不到預覽區塊', 'error');
               return;
           }
-          const canvas = await window.html2canvas(element, { scale: 2, backgroundColor: '#0f172a' });
+          const canvas = await window.html2canvas(element, { 
+              scale: 2, 
+              backgroundColor: '#0f172a',
+              windowWidth: 800, // 強制模擬電腦版寬度，防止手機版提早換行
+              onclone: (clonedDoc) => {
+                  const clonedElement = clonedDoc.getElementById('capture-text');
+                  if (clonedElement) {
+                      clonedElement.style.width = '800px';
+                      clonedElement.style.height = 'auto';
+                      clonedElement.style.overflow = 'visible';
+                  }
+                  const textContainer = clonedDoc.getElementById('preview-text-container');
+                  if (textContainer) {
+                      textContainer.style.fontSize = '30px';
+                      textContainer.style.lineHeight = '52px';
+                      textContainer.style.padding = '36px';
+                      textContainer.style.fontWeight = 'bold';
+                  }
+              }
+          });
           const link = document.createElement('a');
-          link.download = `ContactBook_${getRocFileNameDate(formData.date)}.png`;
-          link.href = canvas.toDataURL('image/png');
+          link.download = `ContactBook_${getRocFileNameDate(formData.date)}.jpg`;
+          link.href = canvas.toDataURL('image/jpeg', 0.9);
           link.click();
           showToast('圖片匯出成功', 'success');
       } catch (error) {
@@ -2714,10 +2368,10 @@ const App = () => {
       showToast('準備批次匯出圖片，這可能需要一點時間...', 'info');
       try {
           if (!window.html2canvas) {
-              await new Promise(r => { const s = document.createElement('script'); s.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js'; s.onload = r; document.head.appendChild(s); });
+              await new Promise((r, reject) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = r; s.onerror = reject; document.head.appendChild(s); });
           }
           if (!window.JSZip) {
-              await new Promise(r => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'; s.onload = r; document.head.appendChild(s); });
+              await new Promise((r, reject) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'; s.onload = r; s.onerror = reject; document.head.appendChild(s); });
           }
 
           let allData = [];
@@ -2740,11 +2394,12 @@ const App = () => {
           const originalCaptureText = document.getElementById('capture-text');
           if (!originalCaptureText) throw new Error("找不到預覽區塊");
 
+          // 創建固定的 800px 隱藏容器，確保排版不被手機版破壞
           const hiddenContainer = document.createElement('div');
-          hiddenContainer.style.position = 'absolute';
+          hiddenContainer.style.position = 'fixed';
           hiddenContainer.style.left = '-9999px';
           hiddenContainer.style.top = '-9999px';
-          hiddenContainer.style.width = originalCaptureText.offsetWidth + 'px'; 
+          hiddenContainer.style.width = '800px'; 
           document.body.appendChild(hiddenContainer);
 
           for (let i = 0; i < allData.length; i++) {
@@ -2756,15 +2411,75 @@ const App = () => {
               const text = generateReportText(data, mockDateInfo);
               
               const clonedNode = originalCaptureText.cloneNode(true);
-              const preElement = clonedNode.querySelector('#report-text');
-              if (preElement) preElement.innerText = text || '尚無內容';
+              clonedNode.style.width = '800px';
+              clonedNode.style.height = 'auto';
+              clonedNode.style.overflow = 'visible';
+              
+              const preElement = clonedNode.querySelector('#preview-text-container');
+              if (preElement) {
+                  preElement.innerHTML = '';
+                  // 設定圖片內的字體樣式
+                  preElement.style.fontSize = '30px';
+                  preElement.style.lineHeight = '52px';
+                  preElement.style.padding = '36px';
+                  preElement.style.fontWeight = 'bold';
+                  
+                  if (!text) {
+                      preElement.innerText = '尚無內容';
+                  } else {
+                      // 將文字轉為 Flex 排版，完美對齊
+                      text.split('\n').forEach(line => {
+                          const div = document.createElement('div');
+                          div.style.minHeight = '1.5em';
+                          div.style.width = '100%';
+                          
+                          // 與網頁版相同的進階對齊邏輯
+                          let prefix = '';
+                          const headerMatch = line.match(/^([^：\n(]{1,30}：)/);
+                          if (headerMatch) {
+                              prefix = headerMatch[1];
+                          } else {
+                              const listMatch = line.match(/^(\s+(?:[-•]\s|\(\d+\)\s)?)/);
+                              if (listMatch) prefix = listMatch[1];
+                          }
+                          
+                          if (prefix) {
+                              const content = line.substring(prefix.length);
+                              div.style.display = 'flex';
+                              
+                              const span1 = document.createElement('span');
+                              span1.style.whiteSpace = 'pre';
+                              span1.style.flexShrink = '0';
+                              span1.textContent = prefix;
+                              
+                              const span2 = document.createElement('span');
+                              span2.style.wordBreak = 'break-word';
+                              span2.style.flex = '1';
+                              span2.style.whiteSpace = 'pre-wrap';
+                              span2.textContent = content;
+                              
+                              div.appendChild(span1);
+                              div.appendChild(span2);
+                          } else {
+                              div.style.wordBreak = 'break-word';
+                              div.style.whiteSpace = 'pre-wrap';
+                              div.textContent = line;
+                          }
+                          preElement.appendChild(div);
+                      });
+                  }
+              }
 
               hiddenContainer.innerHTML = '';
               hiddenContainer.appendChild(clonedNode);
 
-              const canvas = await window.html2canvas(clonedNode, { scale: 2, backgroundColor: '#0f172a' });
-              const imgData = canvas.toDataURL('image/png').split(',')[1];
-              imgFolder.file(`ContactBook_${getRocFileNameDate(data.date)}.png`, imgData, {base64: true});
+              const canvas = await window.html2canvas(clonedNode, { 
+                  scale: 2, 
+                  backgroundColor: '#0f172a',
+                  windowWidth: 800 // 強制模擬電腦寬度
+              });
+              const imgData = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+              imgFolder.file(`ContactBook_${getRocFileNameDate(data.date)}.jpg`, imgData, {base64: true});
               
               if (i % 5 === 0) showToast(`正在產生圖片... ${i+1} / ${allData.length}`, 'info');
           }
