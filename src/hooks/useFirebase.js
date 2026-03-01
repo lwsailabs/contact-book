@@ -1,8 +1,23 @@
 import { useState, useEffect, useRef } from 'react';
-import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
-import { doc, setDoc, getDocs, collection, onSnapshot } from 'firebase/firestore';
-import { ACTIONS } from '../constants/config';
+import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { doc, setDoc, collection, onSnapshot } from 'firebase/firestore';
 import { getInitialFormData } from '../utils/helpers';
+import { ACTIONS } from '../constants/config';
+
+// 深度比對：徹底解決因資料順序不同造成的「儲存中...」無限迴圈
+const deepEqual = (obj1, obj2) => {
+    if (obj1 === obj2) return true;
+    if (typeof obj1 !== 'object' || typeof obj2 !== 'object' || obj1 == null || obj2 == null) return false;
+    if (Array.isArray(obj1) !== Array.isArray(obj2)) return false;
+    const keys1 = Object.keys(obj1);
+    const keys2 = Object.keys(obj2);
+    if (keys1.length !== keys2.length) return false;
+    for (const key of keys1) {
+        if (!keys2.includes(key)) return false;
+        if (!deepEqual(obj1[key], obj2[key])) return false;
+    }
+    return true;
+};
 
 export const useFirebaseSync = (formData, dispatch, auth, db, appId) => {
     const [user, setUser] = useState(null);
@@ -13,12 +28,19 @@ export const useFirebaseSync = (formData, dispatch, auth, db, appId) => {
         if (typeof window !== 'undefined') return localStorage.getItem('contact-book-auth-mode') || null;
         return null;
     });
-    
+
     const isRemoteUpdate = useRef(false);
     const saveTimeoutRef = useRef(null);
     const loadedDateRef = useRef(null);
-    const lastSyncedDataRef = useRef(''); 
+    const lastSyncedDataRef = useRef(null);
+    
+    // 解決 React 閉包陷阱：永遠使用最新的 formData 進行比對
+    const latestFormData = useRef(formData);
+    useEffect(() => {
+        latestFormData.current = formData;
+    }, [formData]);
 
+    // 1. Firebase 登入狀態監聽
     useEffect(() => {
         if (!auth) {
             setIsAuthLoading(false);
@@ -41,68 +63,87 @@ export const useFirebaseSync = (formData, dispatch, auth, db, appId) => {
         return () => unsubscribe();
     }, [auth, authMode, user]);
 
+    // 2. 跨設備讀取與監聽 Firebase 雲端資料 (A設備寫入，B設備會在這裡收到)
     useEffect(() => {
         if (!user || !formData.date || !db || !appId) return;
-        setIsLoaded(false); 
+        setIsLoaded(false);
         loadedDateRef.current = null;
         setSyncStatus('syncing');
-        
+
         const unsub = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'handover_records', `handover_${formData.date}`), (snap) => {
             if (snap.exists()) {
                 const d = snap.data();
-                const localDataForCompare = { ...formData };
+                const localDataForCompare = { ...latestFormData.current };
                 delete localDataForCompare.lastUpdated;
                 const remoteDataForCompare = { ...getInitialFormData(), date: formData.date, ...d };
                 delete remoteDataForCompare.lastUpdated;
 
-                if (JSON.stringify(localDataForCompare) !== JSON.stringify(remoteDataForCompare)) {
+                // 若遠端資料與本地最新資料不同，代表是「另一個設備」更新的
+                if (!deepEqual(localDataForCompare, remoteDataForCompare)) {
                     isRemoteUpdate.current = true;
-                    dispatch({ type: ACTIONS.SET_FULL_DATA, payload: { ...getInitialFormData(), date: formData.date, ...d }});
-                    lastSyncedDataRef.current = JSON.stringify(remoteDataForCompare); 
+                    dispatch({ type: ACTIONS.SET_FULL_DATA, payload: remoteDataForCompare });
+                    lastSyncedDataRef.current = remoteDataForCompare;
                     setSyncStatus('saved');
-                    setTimeout(() => { isRemoteUpdate.current = false; }, 500);
+                    
+                    // 鎖定本地儲存 1 秒，防止互相觸發迴圈
+                    setTimeout(() => { isRemoteUpdate.current = false; }, 1000);
                 } else {
-                    lastSyncedDataRef.current = JSON.stringify(localDataForCompare); 
+                    lastSyncedDataRef.current = localDataForCompare;
+                    // 資料相同但遠端時間較新，同步最後更新時間
+                    if (d.lastUpdated && d.lastUpdated !== latestFormData.current.lastUpdated) {
+                        dispatch({ type: ACTIONS.UPDATE_FIELD, payload: { name: 'lastUpdated', value: d.lastUpdated } });
+                    }
                 }
             } else {
                  const defaultData = { ...getInitialFormData(), date: formData.date };
                  delete defaultData.lastUpdated;
-                 lastSyncedDataRef.current = JSON.stringify(defaultData); 
+                 lastSyncedDataRef.current = defaultData;
             }
             loadedDateRef.current = formData.date;
-            setIsLoaded(true); 
+            setIsLoaded(true);
             if (syncStatus === 'syncing') setSyncStatus('saved');
         }, (err) => { console.error(err); setSyncStatus('error'); });
+
         return () => unsub();
     }, [user, formData.date, dispatch, db, appId]); 
 
+    // 3. 本地寫入資料到 Firebase 雲端
     useEffect(() => {
         if (loadedDateRef.current !== formData.date) return;
         if (isRemoteUpdate.current || !user || !db || !isLoaded || !appId) return;
-        
+
         const localDataForCompare = { ...formData };
         delete localDataForCompare.lastUpdated;
-        if (JSON.stringify(localDataForCompare) === lastSyncedDataRef.current) return;
+        
+        // 如果資料沒有實質改變，就不觸發存檔
+        if (deepEqual(localDataForCompare, lastSyncedDataRef.current)) return;
 
         setSyncStatus('saving');
         clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = setTimeout(async () => {
             try {
-                await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'handover_records', `handover_${formData.date}`), { ...formData, lastUpdated: new Date().toISOString() });
-                lastSyncedDataRef.current = JSON.stringify(localDataForCompare); 
+                const nowIso = new Date().toISOString();
+                // 存檔前先立刻更新本地時間，避免延遲
+                dispatch({ type: ACTIONS.UPDATE_FIELD, payload: { name: 'lastUpdated', value: nowIso } });
+                
+                await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'handover_records', `handover_${formData.date}`), { ...formData, lastUpdated: nowIso });
+                lastSyncedDataRef.current = localDataForCompare;
                 setSyncStatus('saved');
             } catch (e) { setSyncStatus('error'); }
-        }, 500);
-    }, [formData, user, isLoaded, db, appId]); 
+        }, 1000); // 增加緩衝時間至 1 秒
+    }, [formData, user, isLoaded, db, appId]);
 
     return { user, syncStatus, isLoaded, isAuthLoading, authMode, setAuthMode };
 };
 
 export const useRecordedDates = (user, db, appId) => {
     const [recordedDates, setRecordedDates] = useState([]);
+
     useEffect(() => {
         if (!user || !db || !appId) return;
         const q = collection(db, 'artifacts', appId, 'users', user.uid, 'handover_records');
+
+        // 原生監聽：當 A 設備匯入 13 筆資料，B 設備會在這裡立刻收到 Firebase 的推播
         const unsub = onSnapshot(q, (snap) => {
             const dates = [];
             snap.forEach(doc => {
@@ -111,7 +152,9 @@ export const useRecordedDates = (user, db, appId) => {
             });
             setRecordedDates(dates);
         }, (err) => console.error(err));
+        
         return () => unsub();
     }, [user, db, appId]);
+
     return recordedDates;
 };
